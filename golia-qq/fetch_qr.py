@@ -19,6 +19,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/home/hatch/workspace/your_files/golia-qq-qr-940737939.png")
     ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--protocol", choices=["linux", "windows"], default="linux",
+                    help="QQ protocol profile (default linux)")
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -27,7 +29,7 @@ def main() -> int:
         datefmt="%H:%M:%S",
     )
 
-    client = QQClient()
+    client = QQClient(protocol=args.protocol)
     try:
         t0 = time.time()
         server = client.connect()

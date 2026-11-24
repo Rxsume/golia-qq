@@ -16,8 +16,9 @@ COMMAND_TRANS_EMP = "wtlogin.trans_emp"
 
 
 class QQClient:
-    def __init__(self, keystore: Keystore | None = None, timeout: float = 20.0):
-        self.ks = keystore or Keystore()
+    def __init__(self, keystore: Keystore | None = None, timeout: float = 20.0,
+                 protocol: str = "windows"):
+        self.ks = keystore or Keystore(protocol=protocol)
         self.wt = WtLogin(self.ks)
         self.seq = sso.SeqGen()
         self.transport = Transport(timeout=timeout)
@@ -35,7 +36,7 @@ class QQClient:
         """Send one OICQ body wrapped in SSO+Service, return the OICQ body."""
         seq = self.seq.next()
         sso_packet = sso.build_sso12(seq, command, oicq_body, self.ks.guid,
-                                     uid=self.ks.uid)
+                                     proto=self.ks.proto, uid=self.ks.uid)
         frame = sso.build_service12(sso_packet, uin=self.ks.uin)
         log.debug("-> %s seq=%d frame=%dB oicq=%dB", command, seq, len(frame), len(oicq_body))
         self.transport.send(frame)

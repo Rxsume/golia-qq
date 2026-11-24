@@ -22,16 +22,66 @@ from . import proto, tea
 from .binary import Packet, P_INT8, P_INT16, P_INT32, P_LENGTH_ONLY, P_WITH_PREFIX
 from .ecdh import Ecdh
 
-# ---- Windows protocol AppInfo (Lagrange.Core/Common/BotAppInfo.cs) ----
-APP_ID = 1600001604
-SUB_APP_ID = 537291048
-SSO_VERSION = 23
-CURRENT_VERSION = "9.9.19-35184"
-PT_VERSION = "2.0.0"
-PACKAGE_NAME = "com.tencent.qq"
-MISC_BITMAP = 12058620
-APP_CLIENT_VERSION = 35184
-OS_NAME = "Windows"
+# ---- Protocol AppInfo profiles (Lagrange.Core/Common/BotAppInfo.cs) ----
+# Windows (PC) is Lagrange's default but the project is "out of updating"
+# and its 9.9.19 QR login is rejected by Tencent ("扫码授权失败" on both
+# VM and router, 2026-11-24). Lagrange itself recommends the Linux
+# protocol (its sign server only implements Linux). Linux profile:
+# AppId 1600001615, SubAppId 537345891, 3.2.26-46494, SsoVersion 19.
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Proto:
+    name: str
+    app_id: int
+    sub_app_id: int
+    sso_version: int
+    current_version: str
+    pt_version: str
+    package_name: str
+    misc_bitmap: int
+    app_client_version: int
+    os_name: str
+
+
+PROTOCOLS: dict[str, Proto] = {
+    "windows": Proto(
+        name="windows",
+        app_id=1600001604,
+        sub_app_id=537291048,
+        sso_version=23,
+        current_version="9.9.19-35184",
+        pt_version="2.0.0",
+        package_name="com.tencent.qq",
+        misc_bitmap=12058620,
+        app_client_version=35184,
+        os_name="Windows",
+    ),
+    "linux": Proto(
+        name="linux",
+        app_id=1600001615,
+        sub_app_id=537345891,
+        sso_version=19,
+        current_version="3.2.26-46494",
+        pt_version="2.0.0",
+        package_name="com.tencent.qq",
+        misc_bitmap=32764,
+        app_client_version=46494,
+        os_name="Linux",
+    ),
+}
+
+# Default profile (Windows) kept for compatibility; webui/fetch_qr default to Linux.
+APP_ID = PROTOCOLS["windows"].app_id
+SUB_APP_ID = PROTOCOLS["windows"].sub_app_id
+SSO_VERSION = PROTOCOLS["windows"].sso_version
+CURRENT_VERSION = PROTOCOLS["windows"].current_version
+PT_VERSION = PROTOCOLS["windows"].pt_version
+PACKAGE_NAME = PROTOCOLS["windows"].package_name
+MISC_BITMAP = PROTOCOLS["windows"].misc_bitmap
+APP_CLIENT_VERSION = PROTOCOLS["windows"].app_client_version
+OS_NAME = PROTOCOLS["windows"].os_name
 
 # QQ server ECDH public key (uncompressed, from WtLogin.cs)
 SERVER_PUBKEY = bytes([
@@ -50,7 +100,8 @@ EM_ECDH_ST = 0x87
 class Keystore:
     """Minimal keystore: device identity + session keys."""
 
-    def __init__(self, device_name: str | None = None):
+    def __init__(self, device_name: str | None = None, protocol: str = "windows"):
+        self.proto: Proto = PROTOCOLS[protocol]
         self.uin: int = 0
         self.uid: str = ""
         self.guid: bytes = os.urandom(16)
@@ -101,14 +152,15 @@ class _TlvQrCode:
         self._w.exit_barrier(include_prefix=False)
 
     def tlv16(self) -> None:
+        p = self._ks.proto
         self._start(0x16)
         self._w.write_u32(0)
-        self._w.write_u32(APP_ID)
-        self._w.write_u32(SUB_APP_ID)
+        self._w.write_u32(p.app_id)
+        self._w.write_u32(p.sub_app_id)
         self._w.write(self._ks.guid)
-        self._w.write_str(PACKAGE_NAME, P_INT16 | P_LENGTH_ONLY)
-        self._w.write_str(PT_VERSION, P_INT16 | P_LENGTH_ONLY)
-        self._w.write_str(PACKAGE_NAME, P_INT16 | P_LENGTH_ONLY)
+        self._w.write_str(p.package_name, P_INT16 | P_LENGTH_ONLY)
+        self._w.write_str(p.pt_version, P_INT16 | P_LENGTH_ONLY)
+        self._w.write_str(p.package_name, P_INT16 | P_LENGTH_ONLY)
         self._end()
 
     def tlv1b(self) -> None:
@@ -119,9 +171,10 @@ class _TlvQrCode:
         self._end()
 
     def tlv1d(self) -> None:
+        p = self._ks.proto
         self._start(0x1D)
         self._w.write_u8(1)
-        self._w.write_u32(MISC_BITMAP)
+        self._w.write_u32(p.misc_bitmap)
         self._w.write_u32(0)
         self._w.write_u8(0)
         self._end()
@@ -133,18 +186,19 @@ class _TlvQrCode:
 
     def tlv35(self) -> None:
         self._start(0x35)
-        self._w.write_u32(SSO_VERSION)
+        self._w.write_u32(self._ks.proto.sso_version)
         self._end()
 
     def tlv66(self) -> None:
         self._start(0x66)
-        self._w.write_u32(SSO_VERSION)
+        self._w.write_u32(self._ks.proto.sso_version)
         self._end()
 
     def tlv_d1(self) -> None:
+        p = self._ks.proto
         self._start(0xD1)
         qr_ext = proto.encode_message({
-            1: {1: OS_NAME, 2: self._ks.device_name},
+            1: {1: p.os_name, 2: self._ks.device_name},
             4: {6: 1},
         })
         self._w.write(qr_ext)
@@ -163,7 +217,7 @@ class WtLogin:
     def build_trans_emp31(self, unusual_sig: bytes | None = None) -> bytes:
         w = Packet()
         w.write_u16(0)
-        w.write_u32(APP_ID)
+        w.write_u32(self.ks.proto.app_id)
         w.write_u64(0)
         w.write(b"")  # TGT
         w.write_u8(0)
@@ -182,7 +236,7 @@ class WtLogin:
     def build_trans_emp12(self) -> bytes:
         w = Packet()
         w.write_u16(0)
-        w.write_u32(APP_ID)
+        w.write_u32(self.ks.proto.app_id)
         w.write_bytes_prefixed(self.ks.qr_sig or b"", P_INT16 | P_LENGTH_ONLY)
         w.write_u64(0)
         w.write(b"")  # TGT
@@ -213,7 +267,7 @@ class WtLogin:
         w = Packet()
         w.write_u8(1 if encrypt else 0)
         w.write_u16(len(req_span))
-        w.write_u32(APP_ID)
+        w.write_u32(self.ks.proto.app_id)
         w.write_u32(0x72)
         w.write_bytes_prefixed(self.ks.st if encrypt else b"", P_INT16 | P_LENGTH_ONLY)
         w.write_bytes_prefixed(b"", P_INT8 | P_LENGTH_ONLY)
@@ -240,7 +294,7 @@ class WtLogin:
         w.write_u32(0)
         w.write_u8(2)
         w.write_u16(0)  # insId
-        w.write_u16(APP_CLIENT_VERSION)
+        w.write_u16(self.ks.proto.app_client_version)
         w.write_u32(0)  # retryTime
         # encrypt head (no wt session)
         w.write_u8(1)

@@ -14,7 +14,7 @@ import zlib
 
 from . import proto, tea
 from .binary import Packet, P_INT16, P_INT32, P_WITH_PREFIX
-from .wtlogin import SUB_APP_ID, CURRENT_VERSION
+from .wtlogin import PROTOCOLS, Proto
 
 ZERO_KEY = bytes(16)
 
@@ -36,11 +36,13 @@ def _sso_reserve_fields(uid: str = "", sec_info: bytes | None = None) -> bytes:
 
 
 def build_sso12(sequence: int, command: str, data: bytes, guid: bytes,
+                proto: Proto | None = None,
                 uid: str = "", sec_info: bytes | None = None) -> bytes:
     """Build SSO protocol-12 packet (head + payload, each int32-prefixed)."""
+    p = proto or PROTOCOLS["windows"]
     head = Packet()
     head.write_u32(sequence)
-    head.write_u32(SUB_APP_ID)
+    head.write_u32(p.sub_app_id)
     head.write_u32(2052)
     head.write(bytes([0x02]) + bytes(11))  # 12-byte field, first byte 0x02 (Lagrange SsoPacker)
     head.write_bytes_prefixed(b"", P_INT32 | P_WITH_PREFIX)  # A2 (tgt)
@@ -48,7 +50,7 @@ def build_sso12(sequence: int, command: str, data: bytes, guid: bytes,
     head.write_bytes_prefixed(b"", P_INT32 | P_WITH_PREFIX)  # message_cookies
     head.write_str(guid.hex(), P_INT32 | P_WITH_PREFIX)
     head.write_bytes_prefixed(b"", P_INT32 | P_WITH_PREFIX)
-    head.write_str(CURRENT_VERSION, P_INT16 | P_WITH_PREFIX)
+    head.write_str(p.current_version, P_INT16 | P_WITH_PREFIX)
     head.enter_barrier(4)
     head.write(_sso_reserve_fields(uid, sec_info))
     head.exit_barrier(include_prefix=True)

@@ -71,10 +71,17 @@ fetch_qr.py    取二维码入口（存 PNG）
 lagrange-ref/  协议参考源码（只读，不运行）
 ```
 
-协议要点（Windows PC，Lagrange 的 BotAppInfo.Windows）：
-AppId 1600001604，SubAppId 537291048，SsoVersion 23，
-CurrentVersion 9.9.19-35184，AppClientVersion 35184，
-MiscBitMap 12058620，PackageName com.tencent.qq。
+协议要点（双协议，Lagrange 的 BotAppInfo）：
+- Linux（默认，推荐）：AppId 1600001615，SubAppId 537345891，
+  SsoVersion 19，CurrentVersion 3.2.26-46494，AppClientVersion 46494，
+  MiscBitMap 32764，PackageName com.tencent.qq。
+- Windows：AppId 1600001604，SubAppId 537291048，SsoVersion 23，
+  CurrentVersion 9.9.19-35184，AppClientVersion 35184，
+  MiscBitMap 12058620。
+2026-11-24 实测：Windows 9.9.19 在 VM 与路由器上扫码均被腾讯拒
+（“扫码授权失败，请下载最新版QQ”），Lagrange 本身也已停止更新、
+只推荐 Linux 协议，故默认切 Linux（`--protocol linux|windows` 可切）。
+TransEmp31/12 的包结构与 Lagrange 当前 master 逐项核对一致。
 
 登录链路（待 live 验证）：
 TransEmp31 取二维码 → 每 2 秒 TransEmp12 轮询 → Confirmed 后拿

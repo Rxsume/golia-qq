@@ -40,6 +40,7 @@ STATE = {
 QR_IMAGE: bytes | None = None
 QR_FETCHED_AT: float | None = None
 GEN = 0  # generation counter: refresh bumps it, old workers stop
+PROTOCOL = "linux"  # protocol profile for QR workers (set from --protocol)
 
 
 def set_state(state: str, message: str, uin=None):
@@ -53,14 +54,14 @@ def set_state(state: str, message: str, uin=None):
         STATE["qr_ready"] = QR_IMAGE is not None
 
 
-def qr_worker(gen: int, timeout: int = 115):
+def qr_worker(gen: int, timeout: int = 115, protocol: str = "linux"):
     """Fetch one QR, save its PNG, then poll TransEmp12 until an end state."""
     global QR_IMAGE, QR_FETCHED_AT
-    client = QQClient()
+    client = QQClient(protocol=protocol)
     try:
         set_state("fetching", "正在取二维码…")
         server = client.connect()
-        LOG.info("SSO server: %s:8080", server)
+        LOG.info("SSO server: %s:8080 protocol=%s", server, protocol)
         result = client.fetch_qr()
         if result.get("ret_code") != 0 or not result.get("image"):
             set_state("error", f"取码失败 ret_code={result.get('ret_code')}")
@@ -72,7 +73,6 @@ def qr_worker(gen: int, timeout: int = 115):
         LOG.info("QR ready (%d bytes)", len(result["image"]))
 
         deadline = time.time() + timeout
-        last = None
         while time.time() < deadline:
             if gen != GEN:
                 LOG.info("worker gen %d superseded, stopping", gen)
@@ -83,19 +83,23 @@ def qr_worker(gen: int, timeout: int = 115):
             except Exception as e:  # noqa: BLE001 - keep polling on transient errors
                 LOG.warning("poll error: %s", e)
                 continue
+            # TransEmp12 states (Lagrange TransEmpState): 0=Confirmed,
+            # 48=WaitingForScan, 53=WaitingForConfirm (scanned), 17=expired,
+            # 54=canceled, 144=invalid.
             code = st.get("ret_code")
-            if code != last:
-                LOG.info("poll ret_code=%s uin=%s", code, st.get("uin"))
-                last = code
+            LOG.info("poll ret_code=%s uin=%s", code, st.get("uin"))
             if code == 0:
                 set_state("confirmed", "扫码成功，QQ 已登录", uin=st.get("uin"))
                 LOG.info("CONFIRMED uin=%s", st.get("uin"))
                 return
-            if code == 14:
-                # 14 = scanned, waiting for the user to confirm on the phone
+            if code == 53:
+                # scanned, waiting for the user to confirm on the phone
                 set_state("scanned", "已扫码，请在手机 QQ 上点确认登录")
                 continue
-            if code in (17, 19, 20, 21, 22, 23, 24, 25):
+            if code == 48:
+                set_state("waiting", "请用手机 QQ 扫码（2 分钟内有效）")
+                continue
+            if code in (17, 54, 144):
                 set_state("expired", f"二维码已失效（ret_code={code}），请点刷新重取")
                 return
         set_state("timeout", "二维码超时未扫，请点刷新重取")
@@ -106,11 +110,12 @@ def qr_worker(gen: int, timeout: int = 115):
         client.close()
 
 
-def start_fetch():
+def start_fetch(protocol: str | None = None):
     """Bump generation and start a fresh QR worker thread."""
     global GEN
     GEN += 1
-    t = threading.Thread(target=qr_worker, args=(GEN,), daemon=True)
+    t = threading.Thread(target=qr_worker, args=(GEN,),
+                         kwargs={"protocol": protocol or PROTOCOL}, daemon=True)
     t.start()
     return GEN
 
@@ -215,11 +220,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=6198)
     ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--protocol", choices=["linux", "windows"], default="linux",
+                    help="QQ protocol profile (default linux; windows 9.9.19 QR login is rejected by Tencent)")
     args = ap.parse_args()
+    global PROTOCOL
+    PROTOCOL = args.protocol
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    LOG.info("web panel at http://%s:%d/ (LAN: http://192.168.31.2:%d/)", args.host, args.port, args.port)
-    start_fetch()  # fetch the first QR on startup
+    LOG.info("web panel at http://%s:%d/ (LAN: http://192.168.31.2:%d/) protocol=%s", args.host, args.port, args.port, args.protocol)
+    start_fetch(args.protocol)  # fetch the first QR on startup
     try:
         server.serve_forever()
     except KeyboardInterrupt:
