@@ -70,6 +70,22 @@ PROTOCOLS: dict[str, Proto] = {
         app_client_version=46494,
         os_name="Linux",
     ),
+    # Mac protocol from Lagrange BotAppInfo.cs (MacOs). Windows 9.9.19 and
+    # Linux 3.2.26 QR scans are both rejected by Tencent ("扫码授权失败"),
+    # so Mac is the remaining PC profile to try. AppClientVersion 13172 is
+    # Lagrange's value even though CurrentVersion ends in -20139.
+    "macos": Proto(
+        name="macos",
+        app_id=1600001602,
+        sub_app_id=537200848,
+        sso_version=23,
+        current_version="6.9.23-20139",
+        pt_version="2.0.0",
+        package_name="com.tencent.qq",
+        misc_bitmap=12058620,
+        app_client_version=13172,
+        os_name="Mac",
+    ),
 }
 
 # Default profile (Windows) kept for compatibility; webui/fetch_qr default to Linux.

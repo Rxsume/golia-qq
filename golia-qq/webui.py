@@ -40,7 +40,7 @@ STATE = {
 QR_IMAGE: bytes | None = None
 QR_FETCHED_AT: float | None = None
 GEN = 0  # generation counter: refresh bumps it, old workers stop
-PROTOCOL = "linux"  # protocol profile for QR workers (set from --protocol)
+PROTOCOL = "macos"  # protocol profile for QR workers (set from --protocol)
 
 
 def set_state(state: str, message: str, uin=None):
@@ -54,55 +54,77 @@ def set_state(state: str, message: str, uin=None):
         STATE["qr_ready"] = QR_IMAGE is not None
 
 
-def qr_worker(gen: int, timeout: int = 115, protocol: str = "linux"):
-    """Fetch one QR, save its PNG, then poll TransEmp12 until an end state."""
+def qr_worker(gen: int, timeout: int = 115, protocol: str = "macos"):
+    """Fetch one QR, save its PNG, then poll TransEmp12 until an end state.
+
+    The QR is only valid ~2 minutes. When it expires or times out without
+    a scan, auto-fetch a fresh one (up to 10 times) so the panel never
+    shows a stale code — the user just opens the page and scans.
+    """
     global QR_IMAGE, QR_FETCHED_AT
     client = QQClient(protocol=protocol)
+    auto_refreshes = 0
     try:
         set_state("fetching", "正在取二维码…")
         server = client.connect()
         LOG.info("SSO server: %s:8080 protocol=%s", server, protocol)
-        result = client.fetch_qr()
-        if result.get("ret_code") != 0 or not result.get("image"):
-            set_state("error", f"取码失败 ret_code={result.get('ret_code')}")
-            return
-        with LOCK:
-            QR_IMAGE = result["image"]
-            QR_FETCHED_AT = time.time()
-        set_state("waiting", "请用手机 QQ 扫码（2 分钟内有效）")
-        LOG.info("QR ready (%d bytes)", len(result["image"]))
-
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        while auto_refreshes <= 10:
             if gen != GEN:
                 LOG.info("worker gen %d superseded, stopping", gen)
                 return
-            time.sleep(2)
-            try:
-                st = client.poll_qr()
-            except Exception as e:  # noqa: BLE001 - keep polling on transient errors
-                LOG.warning("poll error: %s", e)
-                continue
-            # TransEmp12 states (Lagrange TransEmpState): 0=Confirmed,
-            # 48=WaitingForScan, 53=WaitingForConfirm (scanned), 17=expired,
-            # 54=canceled, 144=invalid.
-            code = st.get("ret_code")
-            LOG.info("poll ret_code=%s uin=%s", code, st.get("uin"))
-            if code == 0:
-                set_state("confirmed", "扫码成功，QQ 已登录", uin=st.get("uin"))
-                LOG.info("CONFIRMED uin=%s", st.get("uin"))
+            result = client.fetch_qr()
+            if result.get("ret_code") != 0 or not result.get("image"):
+                set_state("error", f"取码失败 ret_code={result.get('ret_code')}")
                 return
-            if code == 53:
-                # scanned, waiting for the user to confirm on the phone
-                set_state("scanned", "已扫码，请在手机 QQ 上点确认登录")
-                continue
-            if code == 48:
-                set_state("waiting", "请用手机 QQ 扫码（2 分钟内有效）")
-                continue
-            if code in (17, 54, 144):
-                set_state("expired", f"二维码已失效（ret_code={code}），请点刷新重取")
+            with LOCK:
+                QR_IMAGE = result["image"]
+                QR_FETCHED_AT = time.time()
+            set_state("waiting", "请用手机 QQ 扫码（2 分钟内有效）")
+            LOG.info("QR ready (%d bytes)", len(result["image"]))
+
+            deadline = time.time() + timeout
+            end_reason = None
+            while time.time() < deadline:
+                if gen != GEN:
+                    LOG.info("worker gen %d superseded, stopping", gen)
+                    return
+                time.sleep(2)
+                try:
+                    st = client.poll_qr()
+                except Exception as e:  # noqa: BLE001 - keep polling on transient errors
+                    LOG.warning("poll error: %s", e)
+                    continue
+                # TransEmp12 states (Lagrange TransEmpState): 0=Confirmed,
+                # 48=WaitingForScan, 53=WaitingForConfirm (scanned), 17=expired,
+                # 54=canceled, 144=invalid.
+                code = st.get("ret_code")
+                LOG.info("poll ret_code=%s uin=%s", code, st.get("uin"))
+                if code == 0:
+                    set_state("confirmed", "扫码成功，QQ 已登录", uin=st.get("uin"))
+                    LOG.info("CONFIRMED uin=%s", st.get("uin"))
+                    return
+                if code == 53:
+                    # scanned, waiting for the user to confirm on the phone
+                    set_state("scanned", "已扫码，请在手机 QQ 上点确认登录")
+                    continue
+                if code == 48:
+                    set_state("waiting", "请用手机 QQ 扫码（2 分钟内有效）")
+                    continue
+                if code in (17, 54, 144):
+                    end_reason = f"expired({code})"
+                    break
+            else:
+                end_reason = "timeout"
+            if end_reason is None:
+                end_reason = "timeout"
+            # QR expired / timed out without a scan: auto-fetch a fresh one.
+            auto_refreshes += 1
+            if auto_refreshes > 10:
+                set_state("timeout", "二维码多次超时未扫，请点刷新重取")
                 return
-        set_state("timeout", "二维码超时未扫，请点刷新重取")
+            LOG.info("QR %s, auto-refresh #%d", end_reason, auto_refreshes)
+            set_state("fetching", "二维码已过期，正在取新码…")
+            time.sleep(1)
     except Exception as e:  # noqa: BLE001 - surface any failure in the UI
         LOG.exception("qr_worker failed")
         set_state("error", f"取码出错：{e}")
@@ -220,7 +242,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=6198)
     ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--protocol", choices=["linux", "windows"], default="linux",
+    ap.add_argument("--protocol", choices=["linux", "windows", "macos"], default="macos",
                     help="QQ protocol profile (default linux; windows 9.9.19 QR login is rejected by Tencent)")
     args = ap.parse_args()
     global PROTOCOL

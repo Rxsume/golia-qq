@@ -20,7 +20,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/home/hatch/workspace/your_files/golia-qq-qr-940737939.png")
     ap.add_argument("--timeout", type=int, default=110)
-    ap.add_argument("--protocol", choices=["linux", "windows"], default="linux",
+    ap.add_argument("--protocol", choices=["linux", "windows", "macos"], default="macos",
                     help="QQ protocol profile (default linux)")
     args = ap.parse_args()
 
