@@ -381,17 +381,21 @@ def parse_trans_emp31(body: bytes) -> dict:
 
 
 def parse_trans_emp12(body: bytes) -> dict:
-    """Parse TransEmp12 response body -> {state, uin, tgtgt_key, no_pic_sig, temp_pw}."""
+    """Parse TransEmp12 response body -> {ret_code/state, uin, tgtgt_key, no_pic_sig, temp_pw}.
+
+    Returns both "ret_code" and "state" (same value) — callers use either key.
+    """
     r = Packet(body)
     r.read_i16()  # dummy
     r.read_i32()  # appId
     ret_code = r.read_u8()
     if ret_code != 0:
-        return {"state": ret_code, "uin": 0}
+        return {"ret_code": ret_code, "state": ret_code, "uin": 0}
     uin = r.read_i64()
     r.read_i32()  # retry
     tlvs = tlv_unpack(r)
     return {
+        "ret_code": ret_code,
         "state": ret_code,
         "uin": uin,
         "tgtgt_key": bytes(tlvs.get(0x1E, b"")),
